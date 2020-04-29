@@ -4,7 +4,7 @@ import itertools as it
 import json
 import azure.functions as func
 
-def main(req: func.HttpRequest) -> func.HttpResponse:
+def main(req: func.HttpRequest, outputDocument: func.Out[func.Document]) -> func.HttpResponse:
     logging.info('Python HTTP trigger function processed a request.')
     
     dna = req.params.get('dna')
@@ -17,20 +17,49 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             dna = req_body.get('dna')
 
     if dna:
-        response = json.loads(dna)
-        response = [value for value in response]
-        response = [list(s) for s in response]
-        matches = mutant_count(np.array(response))
-        body=f"match_count:{matches}"
-        if (matches > 1):
+        try:
+            dnaData = json.loads(dna)
+            dnaData = [value for value in dnaData]
+            dnaData = [list(s) for s in dnaData]
+        except:
             return func.HttpResponse(
-                body=body,
-                status_code=200
+             "Please pass mutant dna on the query string or in the request body",
+             status_code=400
             )
-        else:
+
+        try:
+            matches = mutant_count(np.array(dnaData))
+        except:
             return func.HttpResponse(
-                body=body,
-                status_code=403
+             "Please pass mutant dna on the query string or in the request body",
+             status_code=500
+            )
+       
+        logging.info(f'DNA:{dnaData} match count:{matches}.')
+
+        if (matches == None):
+            return func.HttpResponse(
+                "Please pass mutant dna on the query string or in the request body",
+                status_code=400
+            )
+        
+        if (matches > 1):
+            pk = 'mutant'
+            status_code=200
+        elif (matches == 0):
+            pk = 'human'
+            status_code=403
+
+        data = {
+                "PartitionKey": pk,
+                "id": dna,
+                "RowKey": dna,
+                "dna": dna
+            }
+
+        outputDocument.set(func.Document.from_dict(data))
+        return func.HttpResponse(
+                status_code=status_code
             )
     else:
         return func.HttpResponse(
@@ -41,6 +70,13 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
 def mutant_count(adn_matrix, adn_base=['A', 'C', 'G', 'T'], adn_seq_length=4):
     N = len(adn_matrix)
+
+    # verify if DNA sequence contains valid DNA elements
+    ACGT_count = np.count_nonzero(np.logical_or(adn_matrix == 'A', adn_matrix == 'T')) +  np.count_nonzero(np.logical_or(adn_matrix ==  'C', adn_matrix ==  'G'))
+
+    if (ACGT_count != N*N):
+        return None
+
     match_count = 0
 
     # l: letter, g: group
